@@ -3,35 +3,65 @@ var fs = require('fs'),
 var EventEmitter = require('events').EventEmitter;
 var parser = new xml2js.Parser();
 
-var DEBUG = 0;
+var DEBUG = 1;
 
 //Container for message information
-var mavlinkMessage = function(buffer) {
-	//Reported length
-	this.length = buffer[1];
+var mavlinkMessage = function(buffer, version) {
+
+	if (version == "v2.0") {
+		//Reported length
+		this.length = buffer[1];
+		
+		//Sequence number
+		this.sequence = buffer[4];
+		
+		//System ID
+		this.system = buffer[5];
+		
+		//Component ID
+		this.component = buffer[6];
+		
+		//Message ID
+		this.id = buffer[7];
+		
+		//Message payload buffer
+		this.payload = new Buffer(this.length);
+		buffer.copy(this.payload,0,10,10+this.length);
+		
+		//Checksum
+		this.checksum = buffer.readUInt16LE(this.length+10);
+		
+		//Whole message as a buffer
+		this.buffer = new Buffer(this.length + 12);
+		buffer.copy(this.buffer,0,0,12+this.length);
+	} else {
+		//Reported length
+		this.length = buffer[1];
+		
+		//Sequence number
+		this.sequence = buffer[2];
+		
+		//System ID
+		this.system = buffer[3];
+		
+		//Component ID
+		this.component = buffer[4];
+		
+		//Message ID
+		this.id = buffer[5];
+		
+		//Message payload buffer
+		this.payload = new Buffer(this.length);
+		buffer.copy(this.payload,0,6,6+this.length);
+		
+		//Checksum
+		this.checksum = buffer.readUInt16LE(this.length+6);
+		
+		//Whole message as a buffer
+		this.buffer = new Buffer(this.length + 8);
+		buffer.copy(this.buffer,0,0,8+this.length);
+	}
 	
-	//Sequence number
-	this.sequence = buffer[2];
-	
-	//System ID
-	this.system = buffer[3];
-	
-	//Component ID
-	this.component = buffer[4];
-	
-	//Message ID
-	this.id = buffer[5];
-	
-	//Message payload buffer
-	this.payload = new Buffer(this.length);
-	buffer.copy(this.payload,0,6,6+this.length);
-	
-	//Checksum
-	this.checksum = buffer.readUInt16LE(this.length+6);
-	
-	//Whole message as a buffer
-	this.buffer = new Buffer(this.length + 8);
-	buffer.copy(this.buffer,0,0,8+this.length);
 }
 
 
@@ -119,6 +149,9 @@ mavlink.prototype.addMessages = function(messages) {
 	for (var j = 0; j < messages.length; j++) {
 		//If we're v1.0 then calculate message checksums
 		if (this.version == "v1.0") {
+			this.messageChecksums[messages[j].$.id] = this.calculateMessageChecksum(messages[j]);
+		}
+		if (this.version == "v2.0") {
 			this.messageChecksums[messages[j].$.id] = this.calculateMessageChecksum(messages[j]);
 		}
 		this.addMessage(messages[j]);
@@ -308,6 +341,8 @@ mavlink.prototype.startCharacter = function() {
 		return 0xFE;
 	} else if (this.version == "v0.9") {
 		return 0x55;
+	} else if (this.version == "v2.0") {
+		return 0xFD;
 	}
 }
 
@@ -326,15 +361,17 @@ mavlink.prototype.parseChar = function(ch) {
 		this.bufferIndex++;
 		return;
 	}
+	var protocol_len = 8;
+	if (this.version == "v2.0") protocol_len = 12; 
 	
 	//Receive everything else
-	if (this.bufferIndex > 1 && this.bufferIndex < this.messageLength + 8) {
+	if (this.bufferIndex > 1 && this.bufferIndex < this.messageLength + protocol_len) {
 		this.buffer[this.bufferIndex] = ch;
 		this.bufferIndex++;
 	}
 	
 	//If we're at the end of the packet, see if it's valid
-	if (this.bufferIndex == this.messageLength + 8) {
+	if (this.bufferIndex == this.messageLength + protocol_len) {
 	
 		if (this.version == "v1.0") {
 			//Buffer for checksummable data
@@ -343,14 +380,38 @@ mavlink.prototype.parseChar = function(ch) {
 			
 			//Add the message checksum on the end
 			crc_buf[crc_buf.length-1] = this.messageChecksums[this.buffer[5]];
+	
+		} else if (this.version == "v2.0") {
+			//Buffer for checksummable data
+			var crc_buf = new Buffer(this.messageLength+10);
+			this.buffer.copy(crc_buf,0,1,this.messageLength+10);
+			
+			//Add the message checksum on the end
+			crc_buf[crc_buf.length-1] = this.messageChecksums[this.buffer[5]];
 		} else {
 			//Buffer for checksummable data
 			var crc_buf = new Buffer(this.messageLength+5);
 			this.buffer.copy(crc_buf,0,1,this.messageLength+6);
 		}
-		
+		if (this.version == "v2.0") {
+			//update counter
+			this.lastCounter = this.buffer[4];
+			
+			//use message object to parse headers
+			var message = new mavlinkMessage(this.buffer, this.version);
+			//fire an event with the message data
+			this.emit("message", message);
+			//fire additional event for specific message type
+			if (this.getMessageName(this.buffer[7]) == "ATTITUDE")
+				this.emit(this.getMessageName(this.buffer[7]), message, this.decodeMessage(message));
+			if (this.getMessageName(this.buffer[7]) == "GPS_RAW_INT")
+				this.emit(this.getMessageName(this.buffer[7]), message, this.decodeMessage(message));
+			if (this.getMessageName(this.buffer[7]) == "VFR_HUD")
+				this.emit(this.getMessageName(this.buffer[7]), message, this.decodeMessage(message));
+		}
 		//Test the checksum
-		if (this.calculateChecksum(crc_buf) == this.buffer.readUInt16LE(this.messageLength+6)) {
+		else if (this.calculateChecksum(crc_buf) == this.buffer.readUInt16LE(this.messageLength+protocol_len-2))  {
+			console.log('crc ok');
 			//If checksum is good but sequence is screwed, fire off an event
 			if (this.buffer[2] > 0 && this.buffer[2] - this.lastCounter != 1) {
 				this.emit("sequenceError", this.buffer[2] - this.lastCounter - 1);
@@ -359,7 +420,7 @@ mavlink.prototype.parseChar = function(ch) {
 			this.lastCounter = this.buffer[2];
 			
 			//use message object to parse headers
-			var message = new mavlinkMessage(this.buffer);
+			var message = new mavlinkMessage(this.buffer, this.version);
 			
 			//if system and component ID's dont match, ignore message. Alternatively if zeros were specified we return everything.
 			if ((this.sysid == 0 && this.compid == 0) || (message.system == this.sysid && message.component == this.compid)) {
@@ -367,7 +428,10 @@ mavlink.prototype.parseChar = function(ch) {
 				this.emit("message", message);
 				
 				//fire additional event for specific message type
-				this.emit(this.getMessageName(this.buffer[5]), message, this.decodeMessage(message));
+				if (this.version == "v2.0") 				
+					this.emit(this.getMessageName(this.buffer[7]), message, this.decodeMessage(message));
+				else 
+					this.emit(this.getMessageName(this.buffer[5]), message, this.decodeMessage(message));
 			}
 		} else {
 			//If checksum fails, fire an event with some debugging information. Message ID, Message Checksum (XML), Calculated Checksum, Received Checksum
@@ -457,28 +521,33 @@ mavlink.prototype.bufferField = function(buf, offset, field, value) {
 mavlink.prototype.decodeMessage = function(message) {
 	
 	//determine the fields
+	if (this.messagesByID[message.id].field == undefined)
+		return;
 	var fields = this.messagesByID[message.id].field;
-	
 	//initialise the output object and buffer offset
 	var values = new Object();
 	var offset = 0;
 	
 	//loop over fields
 	for (var i = 0; i<fields.length; i++) {
+		if (offset >= message.length)
+			break;
 		//determine if field is an array
 		var fieldSplit = fields[i].$.type.replace("[", " ").replace("]", " ").split(" ");
 		
 		//determine field name
 		var fieldTypeName = fieldSplit[0];
-		
 		//if field is an array, initialise output array
 		if (fieldSplit.length > 1) {
+			break;
 			values[fields[i].$.name] = new Array(fields[i].arrayLength);
 		}
 		
 		//loop over all elements in field and read from buffer
-		for (var j = 0; j<fields[i].arrayLength; j++) {
+		//for (var j = 0; j<fields[i].arrayLength; j++) {
 			var val = 0;
+			if ((offset + this.fieldTypeLength(fields[i])) > message.length)
+				break;
 			switch (fieldTypeName){
 				case 'float':
 					val = message.payload.readFloatLE(offset);
@@ -525,15 +594,14 @@ mavlink.prototype.decodeMessage = function(message) {
 			}
 			
 			//increment offset by field type size
-			offset += fields[i].typeLength;
-			
+			offset += this.fieldTypeLength(fields[i]);
 			//if field is an array, output in to array
 			if (fieldSplit.length > 1) {
 				values[fields[i].$.name][j] =  val;
 			} else {
 				values[fields[i].$.name] = val;
 			}
-		}
+		//}
 		//reconstruct char arrays in to strings
 		if (fieldSplit.length > 1 && fieldTypeName == 'char') {
 			values[fields[i].$.name] = (new Buffer(values[fields[i].$.name])).toString();
@@ -555,7 +623,9 @@ mavlink.prototype.decodeMessage = function(message) {
 //		'yawspeed':0.6
 //	}, callback);
 mavlink.prototype.createMessage = function(msgid, data, cb) { 
+	console.log("create message");
 	//if ID's are zero we can't send data
+	
 	if (this.sysid == 0 && this.compid == 0) {
 		console.log("System and component ID's are zero, cannot create message!");
 	}
@@ -566,27 +636,28 @@ mavlink.prototype.createMessage = function(msgid, data, cb) {
 	if (isNaN(Number(msgid))) {
 		id = this.getMessageID(msgid);
 	}
-	
+	console.log(id);
 	//Get the details of the message
 	var message = this.messagesByID[id];
 	if (message === undefined) {
 		console.log("Message '" + msgid + "' does not exist!");
 		return;
 	}
-	
+	console.log(message.payloadLength);
 	//Create a buffer for the payload and null fill it
 	var payloadBuf = new Buffer(message.payloadLength);
 	payloadBuf.fill('\0');
 	
 	//Loop over the fields in the message
 	var offset = 0;
+	console.log(message.field.length);
 	for (var i = 0; i < message.field.length; i++) {
+		console.log(message.field[i]);
 		//If we don't have data for a field quit out with an error
 		if (data[message.field[i].$.name] === undefined) {
 			console.log("MAVLink: No data supplied for '" + message.field[i].$.name + "'");
 			return;
 		}
-		
 		//If we have data, add it to the buffer
 		this.bufferField(payloadBuf, offset, message.field[i], data[message.field[i].$.name]);
 		
@@ -595,7 +666,10 @@ mavlink.prototype.createMessage = function(msgid, data, cb) {
 	}
 	
 	//Create a buffer for the entire message and null fill
-	var msgBuf = new Buffer(message.payloadLength + 8);
+	var ext_buf=0;
+	if (this.version == "v2.0") 
+		ext_buf = 1;
+	var msgBuf = new Buffer(message.payloadLength + 8 + ext_buf*6);
 	msgBuf.fill('\0');
 	
 	//Determine sequence number
@@ -606,22 +680,23 @@ mavlink.prototype.createMessage = function(msgid, data, cb) {
 	//Construct the header information
 	msgBuf[0] = this.startCharacter();
 	msgBuf[1] = message.payloadLength;
-	msgBuf[2] = this.sequence;
-	msgBuf[3] = this.sysid;
-	msgBuf[4] = this.compid;
-	msgBuf[5] = id;
+	msgBuf[2+ext_buf*2] = this.sequence;
+	msgBuf[3+ext_buf*2] = this.sysid;
+	msgBuf[4+ext_buf*2] = this.compid;
+	msgBuf[5+ext_buf*2] = id;
 	
 	
 	//Copy in the payload buffer
-	payloadBuf.copy(msgBuf,6,0);
+	payloadBuf.copy(msgBuf,6+ext_buf*4,0);
 	
 	//Calculate the CRC
-	var crc_buf = new Buffer(message.payloadLength+6);
-	msgBuf.copy(crc_buf,0,1,message.payloadLength+6);
+	var crc_buf = new Buffer(message.payloadLength+6+ext_buf*6);
+	msgBuf.copy(crc_buf,0,1,message.payloadLength+6+ext_buf*6);
 	crc_buf[crc_buf.length-1] = this.messageChecksums[id];
-	msgBuf.writeUInt16LE(this.calculateChecksum(crc_buf), message.payloadLength+6);
-	
-	var msgObj = new mavlinkMessage(msgBuf);
+	msgBuf.writeUInt16LE(this.calculateChecksum(crc_buf), message.payloadLength+6+ext_buf*6);
+	console.log("create message end");
+	console.log(message.payloadLength);
+	var msgObj = new mavlinkMessage(msgBuf, this.version);
 	
 	cb(msgObj);
 }
