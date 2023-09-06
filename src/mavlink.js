@@ -624,6 +624,8 @@ mavlink.prototype.decodeMessage = function(message) {
 //	}, callback);
 mavlink.prototype.createMessage = function(msgid, data, cb) { 
 	console.log("create message");
+	console.log(msgid);
+	console.log(data);
 	//if ID's are zero we can't send data
 	
 	if (this.sysid == 0 && this.compid == 0) {
@@ -633,7 +635,8 @@ mavlink.prototype.createMessage = function(msgid, data, cb) {
 	var id = msgid;
 	
 	//Is message id numerical? If not then look it up 
-	if (isNaN(Number(msgid))) {
+	if ((isNaN(Number(msgid))) || ((id < 0) && (id > 255))) {
+		console.log(msgid);
 		id = this.getMessageID(msgid);
 	}
 	console.log(id);
@@ -651,20 +654,26 @@ mavlink.prototype.createMessage = function(msgid, data, cb) {
 	//Loop over the fields in the message
 	var offset = 0;
 	console.log(message.field.length);
-	for (var i = 0; i < message.field.length; i++) {
-		console.log(message.field[i]);
-		//If we don't have data for a field quit out with an error
-		if (data[message.field[i].$.name] === undefined) {
-			console.log("MAVLink: No data supplied for '" + message.field[i].$.name + "'");
-			return;
+	for (var j = 0; j < message.field.length; j++) {
+		for (var i = 0; i < message.field.length; i++) {
+			if (message.field[i].initialPos != j)
+				continue;
+			console.log(message.field[i]);
+			//If we don't have data for a field quit out with an error
+			if (data[message.field[i].$.name] === undefined) {
+				console.log("MAVLink: No data supplied for '" + message.field[i].$.name + "'");
+				return;
+			}
+			//If we have data, add it to the buffer
+			this.bufferField(payloadBuf, offset, message.field[i], data[message.field[i].$.name]);
+			
+			//Increment the buffer offset with the total field size
+			offset += message.field[i].length;
+			break;
 		}
-		//If we have data, add it to the buffer
-		this.bufferField(payloadBuf, offset, message.field[i], data[message.field[i].$.name]);
-		
-		//Increment the buffer offset with the total field size
-		offset += message.field[i].length;
 	}
 	
+	console.log(payloadBuf);
 	//Create a buffer for the entire message and null fill
 	var ext_buf=0;
 	if (this.version == "v2.0") 
@@ -685,15 +694,14 @@ mavlink.prototype.createMessage = function(msgid, data, cb) {
 	msgBuf[4+ext_buf*2] = this.compid;
 	msgBuf[5+ext_buf*2] = id;
 	
-	
 	//Copy in the payload buffer
 	payloadBuf.copy(msgBuf,6+ext_buf*4,0);
 	
 	//Calculate the CRC
-	var crc_buf = new Buffer(message.payloadLength+6+ext_buf*6);
-	msgBuf.copy(crc_buf,0,1,message.payloadLength+6+ext_buf*6);
+	var crc_buf = new Buffer(message.payloadLength+6+ext_buf*4);
+	msgBuf.copy(crc_buf,0,1,message.payloadLength+6+ext_buf*4);
 	crc_buf[crc_buf.length-1] = this.messageChecksums[id];
-	msgBuf.writeUInt16LE(this.calculateChecksum(crc_buf), message.payloadLength+6+ext_buf*6);
+	msgBuf.writeUInt16LE(this.calculateChecksum(crc_buf), message.payloadLength+6+ext_buf*4);
 	console.log("create message end");
 	console.log(message.payloadLength);
 	var msgObj = new mavlinkMessage(msgBuf, this.version);
