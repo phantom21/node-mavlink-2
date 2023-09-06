@@ -1,6 +1,6 @@
 {
   "name": "mavlink-2",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Encode and decode MAVLink messages",
   "main": "src/mavlink.js",
   "scripts": {
