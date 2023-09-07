@@ -387,13 +387,13 @@ mavlink.prototype.parseChar = function(ch) {
 			this.buffer.copy(crc_buf,0,1,this.messageLength+10);
 			
 			//Add the message checksum on the end
-			crc_buf[crc_buf.length-1] = this.messageChecksums[this.buffer[5]];
+			crc_buf[crc_buf.length-1] = this.messageChecksums[this.buffer[7]];
 		} else {
 			//Buffer for checksummable data
 			var crc_buf = new Buffer(this.messageLength+5);
 			this.buffer.copy(crc_buf,0,1,this.messageLength+6);
 		}
-		if (this.version == "v2.0") {
+		/*if (this.version == "v2.0") {
 			//update counter
 			this.lastCounter = this.buffer[4];
 			
@@ -402,15 +402,11 @@ mavlink.prototype.parseChar = function(ch) {
 			//fire an event with the message data
 			this.emit("message", message);
 			//fire additional event for specific message type
-			if (this.getMessageName(this.buffer[7]) == "ATTITUDE")
-				this.emit(this.getMessageName(this.buffer[7]), message, this.decodeMessage(message));
-			if (this.getMessageName(this.buffer[7]) == "GPS_RAW_INT")
-				this.emit(this.getMessageName(this.buffer[7]), message, this.decodeMessage(message));
-			if (this.getMessageName(this.buffer[7]) == "VFR_HUD")
-				this.emit(this.getMessageName(this.buffer[7]), message, this.decodeMessage(message));
+			if (this.getMessageName(this.buffer[7]) != "") 
+				this.emit("parse_message", this.getMessageName(this.buffer[7]), message, this.decodeMessage(message));
 		}
 		//Test the checksum
-		else if (this.calculateChecksum(crc_buf) == this.buffer.readUInt16LE(this.messageLength+protocol_len-2))  {
+		else */if (this.calculateChecksum(crc_buf) == this.buffer.readUInt16LE(this.messageLength+protocol_len-2))  {
 			console.log('crc ok');
 			//If checksum is good but sequence is screwed, fire off an event
 			if (this.buffer[2] > 0 && this.buffer[2] - this.lastCounter != 1) {
@@ -428,10 +424,14 @@ mavlink.prototype.parseChar = function(ch) {
 				this.emit("message", message);
 				
 				//fire additional event for specific message type
-				if (this.version == "v2.0") 				
-					this.emit(this.getMessageName(this.buffer[7]), message, this.decodeMessage(message));
-				else 
-					this.emit(this.getMessageName(this.buffer[5]), message, this.decodeMessage(message));
+				if (this.version == "v2.0") {
+					if (this.getMessageName(this.buffer[7]) != "")
+						this.emit("parse_message", this.getMessageName(this.buffer[7]), message, this.decodeMessage(message));
+				} else 
+					this.emit("parse_message", this.getMessageName(this.buffer[5]), message, this.decodeMessage(message));
+			} else {
+				console.log("sys_id - "+ message.system);
+				console.log("comp_id - "+ message.component);
 			}
 		} else {
 			//If checksum fails, fire an event with some debugging information. Message ID, Message Checksum (XML), Calculated Checksum, Received Checksum
