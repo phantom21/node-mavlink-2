@@ -393,20 +393,8 @@ mavlink.prototype.parseChar = function(ch) {
 			var crc_buf = new Buffer(this.messageLength+5);
 			this.buffer.copy(crc_buf,0,1,this.messageLength+6);
 		}
-		/*if (this.version == "v2.0") {
-			//update counter
-			this.lastCounter = this.buffer[4];
-			
-			//use message object to parse headers
-			var message = new mavlinkMessage(this.buffer, this.version);
-			//fire an event with the message data
-			this.emit("message", message);
-			//fire additional event for specific message type
-			if (this.getMessageName(this.buffer[7]) != "") 
-				this.emit("parse_message", this.getMessageName(this.buffer[7]), message, this.decodeMessage(message));
-		}
 		//Test the checksum
-		else */if (this.calculateChecksum(crc_buf) == this.buffer.readUInt16LE(this.messageLength+protocol_len-2))  {
+		if (this.calculateChecksum(crc_buf) == this.buffer.readUInt16LE(this.messageLength+protocol_len-2))  {
 			console.log('crc ok');
 			//If checksum is good but sequence is screwed, fire off an event
 			if (this.buffer[2] > 0 && this.buffer[2] - this.lastCounter != 1) {
