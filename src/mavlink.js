@@ -3,7 +3,7 @@ var fs = require('fs'),
 var EventEmitter = require('events').EventEmitter;
 var parser = new xml2js.Parser();
 
-var DEBUG = 1;
+var DEBUG = 0;
 
 //Container for message information
 var mavlinkMessage = function(buffer, version) {
@@ -395,7 +395,6 @@ mavlink.prototype.parseChar = function(ch) {
 		}
 		//Test the checksum
 		if (this.calculateChecksum(crc_buf) == this.buffer.readUInt16LE(this.messageLength+protocol_len-2))  {
-			console.log('crc ok');
 			//If checksum is good but sequence is screwed, fire off an event
 			if (this.buffer[2] > 0 && this.buffer[2] - this.lastCounter != 1) {
 				this.emit("sequenceError", this.buffer[2] - this.lastCounter - 1);
@@ -413,13 +412,14 @@ mavlink.prototype.parseChar = function(ch) {
 				
 				//fire additional event for specific message type
 				if (this.version == "v2.0") {
-					if (this.getMessageName(this.buffer[7]) != "")
+					if (this.getMessageName(this.buffer[7]) != "") {
 						this.emit("parse_message", this.getMessageName(this.buffer[7]), message, this.decodeMessage(message));
-				} else 
+						this.emit(this.getMessageName(this.buffer[7]), message, this.decodeMessage(message));
+					}
+				} else  {
 					this.emit("parse_message", this.getMessageName(this.buffer[5]), message, this.decodeMessage(message));
-			} else {
-				console.log("sys_id - "+ message.system);
-				console.log("comp_id - "+ message.component);
+					this.emit(this.getMessageName(this.buffer[5]), message, this.decodeMessage(message));
+				}
 			}
 		} else {
 			//If checksum fails, fire an event with some debugging information. Message ID, Message Checksum (XML), Calculated Checksum, Received Checksum
@@ -611,9 +611,6 @@ mavlink.prototype.decodeMessage = function(message) {
 //		'yawspeed':0.6
 //	}, callback);
 mavlink.prototype.createMessage = function(msgid, data, cb) { 
-	console.log("create message");
-	console.log(msgid);
-	console.log(data);
 	//if ID's are zero we can't send data
 	
 	if (this.sysid == 0 && this.compid == 0) {
@@ -624,29 +621,24 @@ mavlink.prototype.createMessage = function(msgid, data, cb) {
 	
 	//Is message id numerical? If not then look it up 
 	if ((isNaN(Number(msgid))) || ((id < 0) && (id > 255))) {
-		console.log(msgid);
 		id = this.getMessageID(msgid);
 	}
-	console.log(id);
 	//Get the details of the message
 	var message = this.messagesByID[id];
 	if (message === undefined) {
 		console.log("Message '" + msgid + "' does not exist!");
 		return;
 	}
-	console.log(message.payloadLength);
 	//Create a buffer for the payload and null fill it
 	var payloadBuf = new Buffer(message.payloadLength);
 	payloadBuf.fill('\0');
 	
 	//Loop over the fields in the message
 	var offset = 0;
-	console.log(message.field.length);
 	for (var j = 0; j < message.field.length; j++) {
 		for (var i = 0; i < message.field.length; i++) {
 			if (message.field[i].initialPos != j)
 				continue;
-			console.log(message.field[i]);
 			//If we don't have data for a field quit out with an error
 			if (data[message.field[i].$.name] === undefined) {
 				console.log("MAVLink: No data supplied for '" + message.field[i].$.name + "'");
@@ -661,7 +653,6 @@ mavlink.prototype.createMessage = function(msgid, data, cb) {
 		}
 	}
 	
-	console.log(payloadBuf);
 	//Create a buffer for the entire message and null fill
 	var ext_buf=0;
 	if (this.version == "v2.0") 
@@ -690,8 +681,6 @@ mavlink.prototype.createMessage = function(msgid, data, cb) {
 	msgBuf.copy(crc_buf,0,1,message.payloadLength+6+ext_buf*4);
 	crc_buf[crc_buf.length-1] = this.messageChecksums[id];
 	msgBuf.writeUInt16LE(this.calculateChecksum(crc_buf), message.payloadLength+6+ext_buf*4);
-	console.log("create message end");
-	console.log(message.payloadLength);
 	var msgObj = new mavlinkMessage(msgBuf, this.version);
 	
 	cb(msgObj);
